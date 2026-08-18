@@ -22,6 +22,8 @@ WARP_CONF="/opt/warp/warp.conf"
 BEGIN_MARK="# --- WARP-MANAGER BEGIN ---"
 END_MARK="# --- WARP-MANAGER END ---"
 
+# ───────────────────────── контейнеры ─────────────────────────
+
 list_containers() {
   docker ps --format '{{.Names}}' | grep -E '^amnezia-awg' || true
 }
@@ -48,6 +50,9 @@ pick_container() {
   echo "${containers[$((sel-1))]}"
 }
 
+# ───────────────────────── клиенты и имена ─────────────────────────
+
+# "pubkey<TAB>ip" для каждого реального [Peer] в awg0.conf
 peer_records() {
   local c="$1"
   docker exec "$c" awk '
@@ -57,6 +62,7 @@ peer_records() {
   ' "$WG_CONF" 2>/dev/null
 }
 
+# "pubkey<TAB>имя" из родного clientsTable Amnezia
 native_names() {
   local c="$1"
   docker exec "$c" awk -F'"' '
@@ -102,6 +108,8 @@ name_for() {
   echo "$ip"
 }
 
+# ───────────────────────── состояние WARP ─────────────────────────
+
 is_installed() {
   local c="$1"
   docker exec "$c" test -f "$WARP_CONF" 2>/dev/null && echo yes || echo no
@@ -118,6 +126,8 @@ warp_ips() {
   ' "$START_SH" 2>/dev/null
 }
 
+# Применяет заданный список IP как "через WARP", остальные — напрямую.
+# $1 = контейнер, далее — список IP.
 apply_warp_ips() {
   local c="$1"; shift
   docker exec -i "$c" bash -s -- "$@" <<'REMOTE'
@@ -186,6 +196,8 @@ echo "Применено."
 REMOTE
 }
 
+# ───────────────────────── установка / ключ ─────────────────────────
+
 cmd_install() {
   local c="$1"
   docker exec -i "$c" bash -s <<REMOTE
@@ -245,6 +257,8 @@ echo "Новый ключ выпущен, интерфейс поднят. Пр�
 wg show warp
 REMOTE
 }
+
+# ───────────────────────── меню-действия ─────────────────────────
 
 cmd_start_all() {
   local c
@@ -308,3 +322,132 @@ toggle_menu() {
     for ip in "${ips[@]}"; do
       local box
       if [ "${state[$((i-1))]}" = "1" ]; then box="✅"; else box="☐ "; fi
+      printf "   %d) %s   %s (%s)\n" "$i" "$box" "$ip" "${names[$((i-1))]}"
+      i=$((i+1))
+    done
+    local on=0
+    for s in "${state[@]}"; do if [ "$s" = "1" ]; then on=$((on+1)); fi; done
+    echo "  Через WARP: $on из ${#ips[@]}"
+    echo "  all) Включить всех   none) Выключить всех"
+    echo "  ok)  Применить        0) Отмена (без изменений)"
+    read -rp "> " sel
+    case "$sel" in
+      0) return ;;
+      ok)
+        local enabled=()
+        for idx in "${!ips[@]}"; do
+          if [ "${state[$idx]}" = "1" ]; then enabled+=("${ips[$idx]}"); fi
+        done
+        apply_warp_ips "$c" "${enabled[@]}"
+        return
+        ;;
+      all) for idx in "${!state[@]}"; do state[$idx]=1; done ;;
+      none) for idx in "${!state[@]}"; do state[$idx]=0; done ;;
+      ''|*[!0-9]*) echo "Неверный ввод" ;;
+      *)
+        if [ "$sel" -ge 1 ] && [ "$sel" -le "${#ips[@]}" ]; then
+          local idx=$((sel-1))
+          if [ "${state[$idx]}" = "1" ]; then state[$idx]=0; else state[$idx]=1; fi
+        else
+          echo "Нет такого номера"
+        fi
+        ;;
+    esac
+  done
+}
+
+rename_menu() {
+  local c
+  c=$(pick_container) || return
+  load_name_caches "$c"
+
+  local ips=() names=()
+  local pk ip
+  while IFS=$'\t' read -r pk ip; do
+    [ -z "$ip" ] && continue
+    ips+=("$ip")
+    names+=("$(name_for "$pk" "$ip")")
+  done < <(peer_records "$c")
+
+  local i=1
+  for ip in "${ips[@]}"; do
+    echo "  $i) $ip (${names[$((i-1))]})"
+    i=$((i+1))
+  done
+  read -rp "Номер клиента: " sel
+  if [ -z "$sel" ]; then return; fi
+  local idx=$((sel-1))
+  if [ "$idx" -lt 0 ] || [ "$idx" -ge "${#ips[@]}" ]; then
+    echo "Нет такого номера"
+    return
+  fi
+  read -rp "Новое имя: " newname
+  set_manual_name "$c" "${ips[$idx]}" "$newname"
+  echo "Ок."
+}
+
+status_menu() {
+  for c in $(list_containers); do
+    local inst
+    inst=$(is_installed "$c")
+    echo "=== $c ==="
+    echo "  Установлен: $inst"
+    if [ "$inst" = "yes" ]; then
+      local hs
+      hs=$(docker exec "$c" wg show warp latest-handshakes 2>/dev/null | awk '{print $2}')
+      if [ -z "$hs" ] || [ "$hs" = "0" ]; then
+        echo "  WARP handshake: НЕТ (туннель не поднят)"
+      else
+        local age=$(( $(date +%s) - hs ))
+        echo "  WARP handshake: ${age}с назад"
+      fi
+      local total on
+      total=$(peer_records "$c" | wc -l)
+      on=$(warp_ips "$c" | grep -c . || true)
+      echo "  Через WARP: $on из $total клиентов"
+    fi
+  done
+}
+
+check_containers() {
+  for c in $(list_containers); do
+    local status
+    status=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null)
+    echo "=== $c ($status) ==="
+  done
+}
+
+# ───────────────────────── главное меню ─────────────────────────
+
+menu() {
+  while true; do
+    echo ""
+    echo "=== WARP-manager: AmneziaWG ==="
+    echo "1) Установить WARP"
+    echo "2) Запустить WARP (всем клиентам)"
+    echo "3) Остановить WARP (всем клиентам)"
+    echo "4) Статус"
+    echo "5) Перевыпуск ключа"
+    echo "6) Список клиентов"
+    echo "7) Управление клиентами WARP (по одному)"
+    echo "8) Проверить контейнеры"
+    echo "9) Переименовать клиента"
+    echo "0) Выход"
+    read -rp "Выбор: " ch
+    case "$ch" in
+      1) c=$(pick_container) && cmd_install "$c" ;;
+      2) cmd_start_all ;;
+      3) cmd_stop_all ;;
+      4) status_menu ;;
+      5) c=$(pick_container) && cmd_reissue "$c" ;;
+      6) show_clients ;;
+      7) toggle_menu ;;
+      8) check_containers ;;
+      9) rename_menu ;;
+      0) exit 0 ;;
+      *) echo "Неверный выбор" ;;
+    esac
+  done
+}
+
+menu
