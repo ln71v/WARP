@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.4"
+VERSION="1.4.1"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -521,7 +521,7 @@ def start(m):
     if not mine(m.from_user.id):
         return bot.reply_to(m, NOPE)
     waiting.discard(m.chat.id)
-    bot.send_message(m.chat.id, "🛰 Васька VPN", reply_markup=main_kb())
+    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
 
 
 @bot.message_handler(func=lambda m: not mine(m.from_user.id))
@@ -541,7 +541,7 @@ def got_name(m):
 
 @bot.message_handler(func=lambda m: mine(m.from_user.id))
 def other(m):
-    bot.send_message(m.chat.id, "🛰 Васька VPN", reply_markup=main_kb())
+    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
 
 
 # ── клиенты WARP ──
@@ -576,7 +576,7 @@ def on_call(call):
     bot.answer_callback_query(call.id)
 
     if d == "main":
-        return edit(call, "🛰 Васька VPN", main_kb())
+        return edit(call, "🛰 Управление WARP", main_kb())
 
     if d == "status":
         edit(call, "⏳ Проверяю...")
@@ -661,7 +661,7 @@ def add_client(m):
                 bot.send_photo(m.chat.id, f, caption="QR для AmneziaVPN / AmneziaWG")
         else:
             bot.send_message(m.chat.id, "QR не влез — импортируй файл.")
-    bot.send_message(m.chat.id, "🛰 Васька VPN", reply_markup=main_kb())
+    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
 
 
 logging.info("бот запущен")
