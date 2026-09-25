@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.2"
+VERSION="1.3"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -303,7 +303,7 @@ REMOTE
 
 # ───────────────────────── клиенты AmneziaWG: добавить / удалить ─────────────────────────
 
-safe_name() { echo "$1" | tr -cd 'A-Za-z0-9_-' | cut -c1-24; }
+safe_name() { python3 -c 'import re,sys; print(re.sub(r"[^\w-]+","_",sys.argv[1]).strip("_")[:24])' "$1"; }
 
 server_ip() {
   local ip
@@ -339,7 +339,7 @@ do_add_client() {
   dx cp "$WG_CONF" "$WG_CONF.bak"
   printf '\n[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = %s/32\n' "$pub" "$psk" "$ip" \
     | docker exec -i "$C" sh -c "cat >> $WG_CONF"
-  dx bash -c "awg syncconf awg0 <(awg-quick strip $WG_CONF)" || { echo "Не применилось на лету — перезапусти контейнер."; }
+  dx bash -c "awg syncconf awg0 <(awg-quick strip $WG_CONF 2>/dev/null) 2>/dev/null" || echo "Не применилось на лету — перезапусти контейнер."
 
   # в clientsTable, чтобы клиента видело приложение Amnezia
   dx cat "$CLIENTS_TABLE" 2>/dev/null | python3 -c '
@@ -473,11 +473,13 @@ sel = {}          # chat_id -> {ip: bool} — черновик переключ�
 waiting = set()   # chat_id, от которых ждём имя нового клиента
 
 
-def api(*args, timeout=180):
+def api(*args, timeout=180, with_err=True):
     try:
         r = subprocess.run(["/usr/local/bin/warp", "api", *args],
                            capture_output=True, text=True, timeout=timeout)
-        return (r.stdout + r.stderr).strip()
+        if r.stderr.strip():
+            logging.info("stderr %s: %s", args[0], r.stderr.strip())
+        return (r.stdout + (r.stderr if with_err else "")).strip()
     except subprocess.TimeoutExpired:
         return "Не дождалась ответа (таймаут)."
 
@@ -641,13 +643,14 @@ def add_client(m):
     if not name or name.startswith("/"):
         return bot.send_message(m.chat.id, "Отмена.", reply_markup=main_kb())
     bot.send_message(m.chat.id, "⏳ Создаю...")
-    out = api("add", name)
+    out = api("add", name, with_err=False)
     logging.info("add %r -> %s", name, out.replace("\n", " | "))
     lines = out.splitlines()
-    path = lines[-1] if lines else ""
-    if not path.endswith(".conf") or not os.path.exists(path):
+    paths = [l for l in lines if l.startswith("/root/warp-clients/") and l.endswith(".conf")]
+    path = paths[-1] if paths else ""
+    if not path or not os.path.exists(path):
         return bot.send_message(m.chat.id, "Не вышло:\n" + out, reply_markup=main_kb())
-    info = "\n".join(lines[:-1])
+    info = "\n".join(l for l in lines if l != path)
     with open(path, "rb") as f:
         doc = telebot.types.InputFile(f, file_name=os.path.basename(path)) if hasattr(telebot.types, "InputFile") else f
         bot.send_document(m.chat.id, doc, caption=info)
