@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.3"
+VERSION="1.3.1"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -724,7 +724,8 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable --now "$BOT_SVC" >/dev/null 2>&1
+  systemctl enable "$BOT_SVC" >/dev/null 2>&1
+  systemctl restart "$BOT_SVC"
   sleep 3
   if systemctl is-active -q "$BOT_SVC"; then
     curl -s --max-time 10 "https://api.telegram.org/bot${token}/sendMessage" \
