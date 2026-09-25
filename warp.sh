@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.5.1"
+VERSION="1.6"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -312,6 +312,53 @@ server_ip() {
   echo "$ip"
 }
 
+DEFAULT_I1='<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>'
+
+# Ключ vpn:// для приложения AmneziaVPN из готового .conf.
+# $1 = путь к .conf, $2 = публичный ключ клиента. Пишет рядом .vpn и печатает его путь.
+make_vpn() {
+  python3 - "$1" "$2" <<'PYVPN'
+import sys, json, zlib, base64, re
+conf, pub = sys.argv[1], sys.argv[2]
+sec, kv = None, {"Interface": {}, "Peer": {}}
+for line in open(conf, encoding="utf-8"):
+    line = line.strip()
+    m = re.match(r"^\[(\w+)\]$", line)
+    if m:
+        sec = m.group(1); continue
+    if sec in kv and "=" in line:
+        k, v = line.split("=", 1); kv[sec][k.strip()] = v.strip()
+i, p = kv["Interface"], kv["Peer"]
+host, port = p["Endpoint"].rsplit(":", 1)
+order = ["Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5"]
+awg = {n: i[n] for n in order if n in i}
+for n in ["I1", "I2", "I3", "I4", "I5"]:
+    awg.setdefault(n, "")
+dns = [d.strip() for d in i.get("DNS", "1.1.1.1, 1.0.0.1").split(",")] + ["1.0.0.1"]
+cfg = ["[Interface]", "Address = " + i["Address"], "DNS = $PRIMARY_DNS, $SECONDARY_DNS", "PrivateKey = " + i["PrivateKey"]]
+cfg += [f"{n} = {awg[n]}" for n in order if n in awg]
+cfg += ["", "[Peer]", "PublicKey = " + p["PublicKey"], "PresharedKey = " + p.get("PresharedKey", ""),
+        "AllowedIPs = 0.0.0.0/0, ::/0", f"Endpoint = {host}:{port}", "PersistentKeepalive = 25", ""]
+last = dict(awg)
+last.update({
+    "allowed_ips": ["0.0.0.0/0", "::/0"], "clientId": pub, "client_ip": i["Address"].split("/")[0],
+    "client_priv_key": i["PrivateKey"], "client_pub_key": pub, "config": "\n".join(cfg),
+    "hostName": host, "mtu": "1376", "persistent_keep_alive": "25", "port": int(port),
+    "psk_key": p.get("PresharedKey", ""), "server_pub_key": p["PublicKey"]})
+c = dict(awg)
+c.update({"last_config": json.dumps(last, indent=4), "port": port, "protocol_version": "2",
+          "subnet_address": re.sub(r"\.\d+/\d+$", ".0", i["Address"]), "transport_proto": "udp"})
+d = {"containers": [{"awg": c, "container": "amnezia-awg2"}], "defaultContainer": "amnezia-awg2",
+     "description": "Васька VPN", "dns1": dns[0], "dns2": dns[1], "hostName": host}
+j = json.dumps(d, indent=4, ensure_ascii=False).encode()
+key = "vpn://" + base64.urlsafe_b64encode(len(j).to_bytes(4, "big") + zlib.compress(j)).decode().rstrip("=")
+out = re.sub(r"\.conf$", ".vpn", conf)
+open(out, "w").write(key + "\n")
+print(out)
+PYVPN
+  chmod 600 "${1%.conf}.vpn" 2>/dev/null
+}
+
 # $1 = имя. Печатает путь к готовому .conf последней строкой.
 do_add_client() {
   local name="$1"
@@ -333,6 +380,8 @@ do_add_client() {
   spub=$(dx cat "$SRV_PUB_FILE" | tr -d '\r\n')
   port=$(dx awk -F'=' '/^ListenPort/{gsub(/[ \t]/,"",$2); print $2}' "$WG_CONF")
   params=$(dx awk '/^\[Interface\]/{f=1;next} /^\[/{f=0} f && /^(Jc|Jmin|Jmax|S[1-4]|H[1-4]|I[1-5])[ \t]*=/' "$WG_CONF")
+  echo "$params" | grep -q '^I1' || params="$params
+I1 = $DEFAULT_I1"
   endpoint="$(server_ip):$port"
   [ -z "$pub" ] || [ -z "$spub" ] || [ -z "$port" ] && { echo "Не смогла прочитать ключи/порт сервера."; return 1; }
 
@@ -372,6 +421,7 @@ print(json.dumps(t,indent=4,ensure_ascii=False))
     echo "PersistentKeepalive = 25"
   } > "$file"
   chmod 600 "$file"
+  make_vpn "$file" "$pub" >/dev/null
   echo "Клиент $name добавлен: $ip (напрямую; через WARP — включи в «Клиенты WARP»)."
   echo "$file"
 }
@@ -410,7 +460,7 @@ print(json.dumps([c for c in t if c.get("clientId")!=pub],indent=4,ensure_ascii=
 ' "$pub" > /tmp/ct.json && docker exec -i "$C" sh -c "cat > $CLIENTS_TABLE" < /tmp/ct.json
   rm -f /tmp/ct.json
   dx sh -c "touch $NAMES_FILE; grep -v '^$ip=' $NAMES_FILE > $NAMES_FILE.tmp; mv $NAMES_FILE.tmp $NAMES_FILE"
-  rm -f "$CLIENTS_DIR"/*_"${ip##*.}".conf
+  rm -f "$CLIENTS_DIR"/*_"${ip##*.}".conf "$CLIENTS_DIR"/*_"${ip##*.}".vpn
   echo "Клиент $ip удалён."
 }
 
@@ -441,7 +491,13 @@ api() {
     add)       with_lock do_add_client "$*" ;;
     del)       with_lock do_del_client "$1" ;;
     conf)      ls "$CLIENTS_DIR"/*_"${1##*.}".conf 2>/dev/null | head -1 ;;
-    *) echo "Команды: clients | installed | status | apply IP... | reissue | add ИМЯ | del IP | conf IP"; return 1 ;;
+    vpn)       # ключ vpn:// клиента, делается из его .conf
+      local cf pk
+      cf=$(ls "$CLIENTS_DIR"/*_"${1##*.}".conf 2>/dev/null | head -1)
+      [ -z "$cf" ] && return 1
+      pk=$(peer_records | awk -F'\t' -v ip="$1" '$2==ip{print $1}')
+      make_vpn "$cf" "$pk" ;;
+    *) echo "Команды: clients | installed | status | apply IP... | reissue | add ИМЯ | del IP | conf IP | vpn IP"; return 1 ;;
   esac
 }
 
@@ -458,7 +514,7 @@ write_bot_py() {
   cat > "$BOT_DIR/bot.py" <<'PYBOT'
 #!/usr/bin/env python3
 # Бот управления WARP. Все действия — через `warp api ...`.
-import os, subprocess, tempfile, logging, traceback
+import os, re, html, subprocess, tempfile, logging, traceback
 import telebot
 from telebot.types import InlineKeyboardMarkup as KB, InlineKeyboardButton as Btn
 
@@ -647,7 +703,7 @@ def on_call(call):
             return edit(call, f"У {ip} конфига на сервере нет: клиент создан в приложении Amnezia, "
                               "его ключ хранится только там. Выдай через «Поделиться» в приложении "
                               "или создай нового клиента здесь.", back_kb())
-        send_conf(cid, path, f"Конфиг {ip}")
+        send_conf(cid, path, f"Конфиг {ip}", ip)
         return bot.send_message(cid, TITLE, reply_markup=main_kb())
 
     if d.startswith("dy|"):
@@ -655,17 +711,31 @@ def on_call(call):
         return edit(call, api("del", d[3:]), back_kb())
 
 
-def send_conf(chat_id, path, caption=""):
+def send_file(chat_id, path, caption=None):
     with open(path, "rb") as f:
         doc = telebot.types.InputFile(f, file_name=os.path.basename(path)) if hasattr(telebot.types, "InputFile") else f
-        bot.send_document(chat_id, doc, caption=caption or None)
-    with tempfile.NamedTemporaryFile(suffix=".png") as png:
-        r = subprocess.run(["qrencode", "-o", png.name, "-r", path], capture_output=True)
-        if r.returncode == 0:
-            with open(png.name, "rb") as f:
-                bot.send_photo(chat_id, f, caption="QR для AmneziaVPN / AmneziaWG")
-        else:
-            bot.send_message(chat_id, "QR не влез — импортируй файл.")
+        bot.send_document(chat_id, doc, caption=caption)
+
+
+def send_conf(chat_id, path, caption="", ip=""):
+    if caption:
+        bot.send_message(chat_id, caption)
+    if not ip:
+        m = re.search(r"_(\d+)\.conf$", path)
+        ip = "10.8.1." + m.group(1) if m else ""
+    # 1) ключ для приложения AmneziaVPN
+    out = api("vpn", ip, with_err=False).strip().splitlines()
+    vpn = out[-1] if out else ""
+    if vpn.endswith(".vpn") and os.path.exists(vpn):
+        key = open(vpn).read().strip()
+        send_file(chat_id, vpn, "📱💻 Для приложения AmneziaVPN (телефон и комп): открой файл или вставь ключ ниже")
+        bot.send_message(chat_id, "<code>" + html.escape(key) + "</code>", parse_mode="HTML")
+        with tempfile.NamedTemporaryFile(suffix=".png") as png:
+            if subprocess.run(["qrencode", "-o", png.name, key], capture_output=True).returncode == 0:
+                with open(png.name, "rb") as f:
+                    bot.send_photo(chat_id, f, caption="QR для AmneziaVPN")
+    # 2) обычный конфиг для роутера и приложения AmneziaWG
+    send_file(chat_id, path, "📡 Для роутера (Keenetic) и приложения AmneziaWG")
 
 
 def add_client(m):
