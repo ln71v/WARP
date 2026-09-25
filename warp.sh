@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.6.2"
+VERSION="1.6.3"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -789,9 +789,8 @@ logging.info("бот запущен")
 bot.infinity_polling(timeout=20, long_polling_timeout=20, logger_level=logging.INFO)
 PYBOT
   sed -i "s/__VERSION__/$VERSION/" "$BOT_DIR/bot.py"
-  # заставка: каждый раз берём свежую из репы, не скачалась — остаётся старая
-  curl -fsSL --max-time 20 https://raw.githubusercontent.com/ln71v/WARP/main/logo.mp4 -o "$BOT_DIR/logo.new" && [ -s "$BOT_DIR/logo.new" ] && mv -f "$BOT_DIR/logo.new" "$BOT_DIR/logo.mp4"
-  rm -f "$BOT_DIR/logo.new"
+  # заставка в сообщениях отключена (иконка — аватарка бота через @BotFather)
+  rm -f "$BOT_DIR/logo.mp4" "$BOT_DIR/logo.new"
   chmod 700 "$BOT_DIR/bot.py"
 }
 
