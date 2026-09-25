@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.4.1"
+VERSION="1.5"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -440,7 +440,8 @@ api() {
     reissue)   with_lock do_reissue ;;
     add)       with_lock do_add_client "$*" ;;
     del)       with_lock do_del_client "$1" ;;
-    *) echo "Команды: clients | installed | status | apply IP... | reissue | add ИМЯ | del IP"; return 1 ;;
+    conf)      ls "$CLIENTS_DIR"/*_"${1##*.}".conf 2>/dev/null | head -1 ;;
+    *) echo "Команды: clients | installed | status | apply IP... | reissue | add ИМЯ | del IP | conf IP"; return 1 ;;
   esac
 }
 
@@ -508,7 +509,7 @@ def main_kb():
     kb = KB(row_width=2)
     kb.add(Btn("📊 Статус", callback_data="status"), Btn("👥 Клиенты WARP", callback_data="warp"))
     kb.add(Btn("➕ Новый клиент", callback_data="add"), Btn("🗑 Удалить клиента", callback_data="del"))
-    kb.add(Btn("🔑 Перевыпуск ключа WARP", callback_data="reissue"))
+    kb.add(Btn("📥 Скачать конфиг", callback_data="get"), Btn("🔑 Перевыпуск ключа", callback_data="reissue"))
     return kb
 
 
@@ -631,9 +632,39 @@ def on_call(call):
         kb = KB().row(Btn(f"Да, удалить {ip}", callback_data=f"dy|{ip}"), Btn("⬅️ Назад", callback_data="del"))
         return edit(call, f"Удалить {ip}? Его ключ перестанет работать.", kb)
 
+    if d == "get":
+        kb = KB(row_width=1)
+        for ip, n, _ in clients():
+            kb.add(Btn(f"📥 {ip} ({n})", callback_data=f"g|{ip}"))
+        kb.add(Btn("⬅️ Назад", callback_data="main"))
+        return edit(call, "Чей конфиг прислать?", kb)
+
+    if d.startswith("g|"):
+        ip = d[2:]
+        path = api("conf", ip, with_err=False).strip()
+        if not path or not os.path.exists(path):
+            return edit(call, f"У {ip} конфига на сервере нет: клиент создан в приложении Amnezia, "
+                              "его ключ хранится только там. Выдай через «Поделиться» в приложении "
+                              "или создай нового клиента здесь.", back_kb())
+        send_conf(cid, path, f"Конфиг {ip}")
+        return bot.send_message(cid, "🛰 Управление WARP", reply_markup=main_kb())
+
     if d.startswith("dy|"):
         edit(call, "⏳ Удаляю...")
         return edit(call, api("del", d[3:]), back_kb())
+
+
+def send_conf(chat_id, path, caption=""):
+    with open(path, "rb") as f:
+        doc = telebot.types.InputFile(f, file_name=os.path.basename(path)) if hasattr(telebot.types, "InputFile") else f
+        bot.send_document(chat_id, doc, caption=caption or None)
+    with tempfile.NamedTemporaryFile(suffix=".png") as png:
+        r = subprocess.run(["qrencode", "-o", png.name, "-r", path], capture_output=True)
+        if r.returncode == 0:
+            with open(png.name, "rb") as f:
+                bot.send_photo(chat_id, f, caption="QR для AmneziaVPN / AmneziaWG")
+        else:
+            bot.send_message(chat_id, "QR не влез — импортируй файл.")
 
 
 def add_client(m):
@@ -651,16 +682,7 @@ def add_client(m):
     if not path or not os.path.exists(path):
         return bot.send_message(m.chat.id, "Не вышло:\n" + out, reply_markup=main_kb())
     info = "\n".join(l for l in lines if l != path)
-    with open(path, "rb") as f:
-        doc = telebot.types.InputFile(f, file_name=os.path.basename(path)) if hasattr(telebot.types, "InputFile") else f
-        bot.send_document(m.chat.id, doc, caption=info)
-    with tempfile.NamedTemporaryFile(suffix=".png") as png:
-        r = subprocess.run(["qrencode", "-o", png.name, "-r", path], capture_output=True)
-        if r.returncode == 0:
-            with open(png.name, "rb") as f:
-                bot.send_photo(m.chat.id, f, caption="QR для AmneziaVPN / AmneziaWG")
-        else:
-            bot.send_message(m.chat.id, "QR не влез — импортируй файл.")
+    send_conf(m.chat.id, path, info)
     bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
 
 
