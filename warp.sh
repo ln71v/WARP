@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.5"
+VERSION="1.5.1"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -465,6 +465,7 @@ from telebot.types import InlineKeyboardMarkup as KB, InlineKeyboardButton as Bt
 TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_ID = int(os.environ["ADMIN_ID"])
 NOPE = "Съебался в ужасе."
+TITLE = "🛰 Управление WARP v__VERSION__\nот Vaska_de_Gamma"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 telebot.logger.setLevel(logging.INFO)
@@ -522,7 +523,7 @@ def start(m):
     if not mine(m.from_user.id):
         return bot.reply_to(m, NOPE)
     waiting.discard(m.chat.id)
-    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
+    bot.send_message(m.chat.id, TITLE, reply_markup=main_kb())
 
 
 @bot.message_handler(func=lambda m: not mine(m.from_user.id))
@@ -542,7 +543,7 @@ def got_name(m):
 
 @bot.message_handler(func=lambda m: mine(m.from_user.id))
 def other(m):
-    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
+    bot.send_message(m.chat.id, TITLE, reply_markup=main_kb())
 
 
 # ── клиенты WARP ──
@@ -566,7 +567,7 @@ def show_warp(call, reload=True):
         names_cache[cid] = {ip: n for ip, n, _ in cl}
     if not sel.get(cid):
         return edit(call, "Клиентов нет.", back_kb())
-    edit(call, "👥 Клиенты WARP\n(жми для переключения, потом ПРИМЕНИТЬ)", warp_kb(cid, names_cache.get(cid, {})))
+    edit(call, "👥 Клиенты Amnezia\n✅ — через WARP, ❌ — напрямую\n(жми для переключения, потом ПРИМЕНИТЬ)", warp_kb(cid, names_cache.get(cid, {})))
 
 
 @bot.callback_query_handler(func=lambda c: True)
@@ -577,7 +578,7 @@ def on_call(call):
     bot.answer_callback_query(call.id)
 
     if d == "main":
-        return edit(call, "🛰 Управление WARP", main_kb())
+        return edit(call, TITLE, main_kb())
 
     if d == "status":
         edit(call, "⏳ Проверяю...")
@@ -647,7 +648,7 @@ def on_call(call):
                               "его ключ хранится только там. Выдай через «Поделиться» в приложении "
                               "или создай нового клиента здесь.", back_kb())
         send_conf(cid, path, f"Конфиг {ip}")
-        return bot.send_message(cid, "🛰 Управление WARP", reply_markup=main_kb())
+        return bot.send_message(cid, TITLE, reply_markup=main_kb())
 
     if d.startswith("dy|"):
         edit(call, "⏳ Удаляю...")
@@ -683,12 +684,13 @@ def add_client(m):
         return bot.send_message(m.chat.id, "Не вышло:\n" + out, reply_markup=main_kb())
     info = "\n".join(l for l in lines if l != path)
     send_conf(m.chat.id, path, info)
-    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
+    bot.send_message(m.chat.id, TITLE, reply_markup=main_kb())
 
 
 logging.info("бот запущен")
 bot.infinity_polling(timeout=20, long_polling_timeout=20, logger_level=logging.INFO)
 PYBOT
+  sed -i "s/__VERSION__/$VERSION/" "$BOT_DIR/bot.py"
   chmod 700 "$BOT_DIR/bot.py"
 }
 
@@ -904,7 +906,7 @@ menu() {
     all=$(peer_records | grep -c . || true)
     on=$(warp_ips | grep -c . || true)
     echo "${B}════════════════════════════════════════${N}"
-    echo "${W}  Васька VPN v$VERSION${N}"
+    echo "${W}  Васька VPN v$VERSION${N}  от Vaska_de_Gamma"
     echo "${B}════════════════════════════════════════${N}"
     echo "  Контейнер: $C"
     echo "  WARP:      $(warp_state)"
