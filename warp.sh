@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.6"
+VERSION="1.6.1"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -527,6 +527,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 telebot.logger.setLevel(logging.INFO)
 
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
+LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.mp4")
+logo_id = None    # после первой отправки Telegram отдаёт id файла — дальше шлём по нему
 sel = {}          # chat_id -> {ip: bool} — черновик переключателей WARP
 waiting = set()   # chat_id, от которых ждём имя нового клиента
 
@@ -555,11 +557,31 @@ def mine(uid):
     return uid == ADMIN_ID
 
 
+def send_menu(chat_id):
+    global logo_id
+    if os.path.exists(LOGO):
+        try:
+            if logo_id:
+                return bot.send_animation(chat_id, logo_id, caption=TITLE, reply_markup=main_kb())
+            with open(LOGO, "rb") as f:
+                m = bot.send_animation(chat_id, f, caption=TITLE, reply_markup=main_kb())
+            media = m.animation or m.document or m.video
+            logo_id = media.file_id if media else None
+            return m
+        except Exception:
+            logging.exception("logo")
+    return bot.send_message(chat_id, TITLE, reply_markup=main_kb())
+
+
 def edit(call, text, kb=None):
+    msg = call.message
     try:
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb)
+        if msg.content_type == "text":
+            bot.edit_message_text(text, msg.chat.id, msg.message_id, reply_markup=kb)
+        else:   # сообщение с логотипом — меняем подпись
+            bot.edit_message_caption(text[:1024], msg.chat.id, msg.message_id, reply_markup=kb)
     except Exception:
-        bot.send_message(call.message.chat.id, text, reply_markup=kb)
+        bot.send_message(msg.chat.id, text, reply_markup=kb)
 
 
 def main_kb():
@@ -579,7 +601,7 @@ def start(m):
     if not mine(m.from_user.id):
         return bot.reply_to(m, NOPE)
     waiting.discard(m.chat.id)
-    bot.send_message(m.chat.id, TITLE, reply_markup=main_kb())
+    send_menu(m.chat.id)
 
 
 @bot.message_handler(func=lambda m: not mine(m.from_user.id))
@@ -599,7 +621,7 @@ def got_name(m):
 
 @bot.message_handler(func=lambda m: mine(m.from_user.id))
 def other(m):
-    bot.send_message(m.chat.id, TITLE, reply_markup=main_kb())
+    send_menu(m.chat.id)
 
 
 # ── клиенты WARP ──
@@ -634,7 +656,13 @@ def on_call(call):
     bot.answer_callback_query(call.id)
 
     if d == "main":
-        return edit(call, TITLE, main_kb())
+        if call.message.content_type != "text":
+            return edit(call, TITLE, main_kb())
+        try:
+            bot.delete_message(cid, call.message.message_id)
+        except Exception:
+            pass
+        return send_menu(cid)
 
     if d == "status":
         edit(call, "⏳ Проверяю...")
@@ -704,7 +732,7 @@ def on_call(call):
                               "его ключ хранится только там. Выдай через «Поделиться» в приложении "
                               "или создай нового клиента здесь.", back_kb())
         send_conf(cid, path, f"Конфиг {ip}", ip)
-        return bot.send_message(cid, TITLE, reply_markup=main_kb())
+        return send_menu(cid)
 
     if d.startswith("dy|"):
         edit(call, "⏳ Удаляю...")
@@ -754,13 +782,14 @@ def add_client(m):
         return bot.send_message(m.chat.id, "Не вышло:\n" + out, reply_markup=main_kb())
     info = "\n".join(l for l in lines if l != path)
     send_conf(m.chat.id, path, info)
-    bot.send_message(m.chat.id, TITLE, reply_markup=main_kb())
+    send_menu(m.chat.id)
 
 
 logging.info("бот запущен")
 bot.infinity_polling(timeout=20, long_polling_timeout=20, logger_level=logging.INFO)
 PYBOT
   sed -i "s/__VERSION__/$VERSION/" "$BOT_DIR/bot.py"
+  [ -s "$BOT_DIR/logo.mp4" ] || curl -fsSL --max-time 20 https://raw.githubusercontent.com/ln71v/WARP/main/logo.mp4 -o "$BOT_DIR/logo.mp4" || rm -f "$BOT_DIR/logo.mp4"
   chmod 700 "$BOT_DIR/bot.py"
 }
 
