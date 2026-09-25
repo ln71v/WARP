@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.1"
+VERSION="1.2"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -457,7 +457,7 @@ write_bot_py() {
   cat > "$BOT_DIR/bot.py" <<'PYBOT'
 #!/usr/bin/env python3
 # Бот управления WARP. Все действия — через `warp api ...`.
-import os, subprocess, tempfile
+import os, subprocess, tempfile, logging, traceback
 import telebot
 from telebot.types import InlineKeyboardMarkup as KB, InlineKeyboardButton as Btn
 
@@ -465,8 +465,12 @@ TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_ID = int(os.environ["ADMIN_ID"])
 NOPE = "Съебался в ужасе."
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+telebot.logger.setLevel(logging.INFO)
+
 bot = telebot.TeleBot(TOKEN, parse_mode=None)
-sel = {}   # chat_id -> {ip: bool} — черновик переключателей WARP
+sel = {}          # chat_id -> {ip: bool} — черновик переключателей WARP
+waiting = set()   # chat_id, от которых ждём имя нового клиента
 
 
 def api(*args, timeout=180):
@@ -514,12 +518,28 @@ def back_kb():
 def start(m):
     if not mine(m.from_user.id):
         return bot.reply_to(m, NOPE)
+    waiting.discard(m.chat.id)
     bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
 
 
 @bot.message_handler(func=lambda m: not mine(m.from_user.id))
 def stranger(m):
     bot.reply_to(m, NOPE)
+
+
+@bot.message_handler(func=lambda m: mine(m.from_user.id) and m.chat.id in waiting)
+def got_name(m):
+    waiting.discard(m.chat.id)
+    try:
+        add_client(m)
+    except Exception:
+        logging.exception("add_client")
+        bot.send_message(m.chat.id, "Ошибка:\n" + traceback.format_exc()[-1500:], reply_markup=main_kb())
+
+
+@bot.message_handler(func=lambda m: mine(m.from_user.id))
+def other(m):
+    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
 
 
 # ── клиенты WARP ──
@@ -594,8 +614,8 @@ def on_call(call):
         return edit(call, api("reissue"), back_kb())
 
     if d == "add":
-        msg = bot.send_message(cid, "Имя нового клиента (например: Света телефон):")
-        return bot.register_next_step_handler(msg, add_client)
+        waiting.add(cid)
+        return bot.send_message(cid, "Напиши имя нового клиента (например: Света телефон).\n/start — отмена.")
 
     if d == "del":
         kb = KB(row_width=1)
@@ -622,13 +642,15 @@ def add_client(m):
         return bot.send_message(m.chat.id, "Отмена.", reply_markup=main_kb())
     bot.send_message(m.chat.id, "⏳ Создаю...")
     out = api("add", name)
+    logging.info("add %r -> %s", name, out.replace("\n", " | "))
     lines = out.splitlines()
     path = lines[-1] if lines else ""
     if not path.endswith(".conf") or not os.path.exists(path):
         return bot.send_message(m.chat.id, "Не вышло:\n" + out, reply_markup=main_kb())
     info = "\n".join(lines[:-1])
     with open(path, "rb") as f:
-        bot.send_document(m.chat.id, f, visible_file_name=os.path.basename(path), caption=info)
+        doc = telebot.types.InputFile(f, file_name=os.path.basename(path)) if hasattr(telebot.types, "InputFile") else f
+        bot.send_document(m.chat.id, doc, caption=info)
     with tempfile.NamedTemporaryFile(suffix=".png") as png:
         r = subprocess.run(["qrencode", "-o", png.name, "-r", path], capture_output=True)
         if r.returncode == 0:
@@ -639,7 +661,8 @@ def add_client(m):
     bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
 
 
-bot.infinity_polling(timeout=20, long_polling_timeout=20)
+logging.info("бот запущен")
+bot.infinity_polling(timeout=20, long_polling_timeout=20, logger_level=logging.INFO)
 PYBOT
   chmod 700 "$BOT_DIR/bot.py"
 }
