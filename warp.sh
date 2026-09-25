@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.7.2"
+VERSION="1.7.3"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -200,11 +200,33 @@ REMOTE
 
 # ───────────────────────── WARP-профиль ─────────────────────────
 
+# Внутри контейнера: докачать wgcf, если его нет. $1 = запасная версия.
+GET_WGCF='
+command -v wg-quick >/dev/null || apk add --no-cache wireguard-tools >/dev/null
+command -v curl >/dev/null || apk add --no-cache curl >/dev/null
+if ! /usr/local/bin/wgcf --help >/dev/null 2>&1; then
+  case "$(uname -m)" in
+    x86_64) A=amd64 ;; aarch64) A=arm64 ;; armv7l) A=armv7 ;;
+    *) echo "Неизвестная архитектура"; exit 1 ;;
+  esac
+  URL=$(curl -s https://api.github.com/repos/ViRb3/wgcf/releases/latest | grep browser_download_url | grep "linux_$A\"" | cut -d "\"" -f4 | head -1)
+  [ -z "$URL" ] && URL="https://github.com/ViRb3/wgcf/releases/download/$1/wgcf_${1#v}_linux_$A"
+  echo "Качаю wgcf: $URL"
+  curl -fsSL -o /usr/local/bin/wgcf "$URL" && chmod +x /usr/local/bin/wgcf
+  /usr/local/bin/wgcf --help >/dev/null 2>&1 || { echo "wgcf не скачался"; rm -f /usr/local/bin/wgcf; exit 1; }
+fi
+'
+
+# Внутри контейнера: новый WARP-профиль в отдельной папке.
+# Старый ключ трогаем только если новый получен.
 MAKE_PROFILE='
-cd /opt/warp
-rm -f wgcf-account.toml wgcf-profile.conf warp.conf
-wgcf register --accept-tos >/dev/null
-wgcf generate >/dev/null
+mkdir -p /opt/warp
+rm -rf /opt/warp/.new && mkdir -p /opt/warp/.new && cd /opt/warp/.new
+if ! wgcf register --accept-tos >/dev/null 2>&1 || ! wgcf generate >/dev/null 2>&1; then
+  echo "Cloudflare не выдал новый ключ. Старый не тронут. Попробуй позже."
+  cd /opt/warp && rm -rf /opt/warp/.new
+  exit 1
+fi
 # DNS убираем (в Alpine ломает wg-quick), Table=off (не трогаем основной маршрут),
 # PersistentKeepalive=25 (иначе туннель отваливается от простоя)
 awk "
@@ -216,45 +238,50 @@ awk "
 chmod 600 warp.conf wgcf-account.toml
 '
 
+# Внутри контейнера: переключиться на новый профиль и поднять туннель.
+SWAP_PROFILE='
+wg-quick down /opt/warp/warp.conf >/dev/null 2>&1 || true
+ip link del warp >/dev/null 2>&1 || true
+mv -f /opt/warp/.new/wgcf-account.toml /opt/warp/.new/wgcf-profile.conf /opt/warp/.new/warp.conf /opt/warp/
+rm -rf /opt/warp/.new
+cd /opt/warp
+wg-quick up /opt/warp/warp.conf >/dev/null
+sleep 3
+'
+
 do_install() {
   if is_installed; then echo "WARP уже установлен. Для нового ключа — перевыпуск."; return 0; fi
   echo "Ставлю WARP в $C..."
   docker exec -i "$C" bash -s "$WGCF_FALLBACK" <<REMOTE
 set -e
-command -v wg-quick >/dev/null || apk add --no-cache wireguard-tools >/dev/null
-command -v curl >/dev/null || apk add --no-cache curl >/dev/null
-case "\$(uname -m)" in
-  x86_64) A=amd64 ;; aarch64) A=arm64 ;; armv7l) A=armv7 ;;
-  *) echo "Неизвестная архитектура"; exit 1 ;;
-esac
-URL=\$(curl -s https://api.github.com/repos/ViRb3/wgcf/releases/latest | grep browser_download_url | grep "linux_\$A\"" | cut -d '"' -f4 | head -1)
-if [ -z "\$URL" ]; then V=\$1; URL="https://github.com/ViRb3/wgcf/releases/download/\$V/wgcf_\${V#v}_linux_\$A"; fi
-echo "Качаю wgcf: \$URL"
-curl -fsSL -o /usr/local/bin/wgcf "\$URL"
-chmod +x /usr/local/bin/wgcf
-/usr/local/bin/wgcf --help >/dev/null 2>&1 || { echo "wgcf скачался битым"; rm -f /usr/local/bin/wgcf; exit 1; }
-mkdir -p /opt/warp
+$GET_WGCF
 echo "Регистрирую WARP-аккаунт..."
 $MAKE_PROFILE
-wg-quick up /opt/warp/warp.conf >/dev/null
-sleep 3
+$SWAP_PROFILE
 echo "WARP поднят."
 REMOTE
   [ $? -eq 0 ] || { echo "Установка не удалась."; return 1; }
-  apply_warp_ips
-  echo "Готово. Клиенты пока идут напрямую — включи нужных в «Клиенты WARP»."
+  # клиенты, которые уже были отмечены «через WARP», остаются
+  local keep
+  keep=$(warp_ips)
+  apply_warp_ips $keep
+  if [ -n "$keep" ]; then echo "Готово. Через WARP, как и раньше: $(echo $keep)"
+  else echo "Готово. Клиенты пока идут напрямую — включи нужных в «Клиенты WARP»."; fi
 }
 
 do_reissue() {
-  is_installed || { echo "WARP не установлен."; return 1; }
+  if ! is_installed; then
+    echo "Ключа WARP нет — ставлю заново."
+    do_install; return $?
+  fi
   echo "Перевыпускаю ключ..."
-  docker exec -i "$C" bash -s <<REMOTE
+  docker exec -i "$C" bash -s "$WGCF_FALLBACK" <<REMOTE
 set -e
-wg-quick down /opt/warp/warp.conf >/dev/null 2>&1 || true
+$GET_WGCF
 $MAKE_PROFILE
-wg-quick up /opt/warp/warp.conf >/dev/null
-sleep 3
+$SWAP_PROFILE
 REMOTE
+  [ $? -eq 0 ] || { echo "Связь: $(warp_state)"; return 1; }
   dx sh -c "ip route replace default dev warp table $TABLE" 2>/dev/null
   echo "Новый ключ выпущен. Клиенты остались как были."
   echo "Связь: $(warp_state)"
