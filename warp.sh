@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.7.1"
+VERSION="1.7.2"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -773,15 +773,22 @@ def deliver(chat_id, ip, kind):
 
     if kind == "dev":
         bot.send_message(chat_id,
-            "📱💻 <b>Телефон или компьютер</b>\n"
-            "1. Установи приложение <b>AmneziaVPN</b>:\n"
-            "   • Android — Google Play\n"
-            "   • iPhone — App Store\n"
-            "   • Компьютер — amnezia.org/downloads\n"
-            "2. Нажми на ключ ниже — он скопируется.\n"
-            "3. В AmneziaVPN нажми «Вставить», потом «Продолжить».\n"
-            "4. Нажми большую кнопку — готово.", parse_mode="HTML")
+            "📱💻 <b>Телефон или компьютер</b>\n\n"
+            "Сначала установи приложение <b>AmneziaVPN</b>:\n"
+            "• Android — Google Play\n"
+            "• iPhone — App Store\n"
+            "• Компьютер — amnezia.org/downloads\n\n"
+            "Дальше <b>любой из двух способов</b> 👇", parse_mode="HTML")
+        bot.send_message(chat_id,
+            "<b>Способ 1 — ключ</b>\n"
+            "1. Нажми на длинный текст ниже — он скопируется.\n"
+            "2. В AmneziaVPN нажми <b>«Вставить»</b>, потом <b>«Продолжить»</b>.", parse_mode="HTML")
         bot.send_message(chat_id, "<code>" + html.escape(key) + "</code>", parse_mode="HTML")
+        send_file(chat_id, vpn,
+            "Способ 2 — файл\n"
+            "1. Скачай этот файл.\n"
+            "2. В AmneziaVPN выбери «Файл с настройками подключения» и укажи его.")
+        bot.send_message(chat_id, "✅ После этого нажми в приложении большую кнопку подключения.")
     if kind == "router":
         send_file(chat_id, conf,
             "📡 Для роутера Keenetic\n"
