@@ -1,4 +1,4 @@
-# WARP Manager для AmneziaWG
+# Васька VPN — AmneziaWG + WARP + Telegram-бот
 
 Меню и Telegram-бот для управления Cloudflare WARP поверх **AmneziaWG 2**, установленного через приложение Amnezia (Docker-контейнер `amnezia-awg2`).
 

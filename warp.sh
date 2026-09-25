@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# warp — менеджер Cloudflare WARP для AmneziaWG 2 (Docker, контейнер из приложения Amnezia).
+# warp — «Васька VPN»: менеджер Cloudflare WARP для AmneziaWG 2 (Docker, контейнер из приложения Amnezia).
 # Репа: github.com/ln71v/WARP
 #
 # Запуск на хосте от root:
@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.3.1"
+VERSION="1.4"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -521,7 +521,7 @@ def start(m):
     if not mine(m.from_user.id):
         return bot.reply_to(m, NOPE)
     waiting.discard(m.chat.id)
-    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
+    bot.send_message(m.chat.id, "🛰 Васька VPN", reply_markup=main_kb())
 
 
 @bot.message_handler(func=lambda m: not mine(m.from_user.id))
@@ -541,7 +541,7 @@ def got_name(m):
 
 @bot.message_handler(func=lambda m: mine(m.from_user.id))
 def other(m):
-    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
+    bot.send_message(m.chat.id, "🛰 Васька VPN", reply_markup=main_kb())
 
 
 # ── клиенты WARP ──
@@ -576,7 +576,7 @@ def on_call(call):
     bot.answer_callback_query(call.id)
 
     if d == "main":
-        return edit(call, "🛰 Управление WARP", main_kb())
+        return edit(call, "🛰 Васька VPN", main_kb())
 
     if d == "status":
         edit(call, "⏳ Проверяю...")
@@ -661,7 +661,7 @@ def add_client(m):
                 bot.send_photo(m.chat.id, f, caption="QR для AmneziaVPN / AmneziaWG")
         else:
             bot.send_message(m.chat.id, "QR не влез — импортируй файл.")
-    bot.send_message(m.chat.id, "🛰 Управление WARP", reply_markup=main_kb())
+    bot.send_message(m.chat.id, "🛰 Васька VPN", reply_markup=main_kb())
 
 
 logging.info("бот запущен")
@@ -710,7 +710,7 @@ bot_setup() {
   chmod 600 "$BOT_ENV"
   cat > "/etc/systemd/system/$BOT_SVC.service" <<EOF
 [Unit]
-Description=WARP Manager Telegram bot
+Description=Vaska VPN Telegram bot
 After=network-online.target docker.service
 Wants=network-online.target
 
@@ -882,7 +882,7 @@ menu() {
     all=$(peer_records | grep -c . || true)
     on=$(warp_ips | grep -c . || true)
     echo "${B}════════════════════════════════════════${N}"
-    echo "${W}  WARP Manager v$VERSION${N}"
+    echo "${W}  Васька VPN v$VERSION${N}"
     echo "${B}════════════════════════════════════════${N}"
     echo "  Контейнер: $C"
     echo "  WARP:      $(warp_state)"
