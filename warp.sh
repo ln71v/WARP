@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-VERSION="1.7.3"
+VERSION="1.7.4"
 TABLE=100
 WG_CONF="/opt/amnezia/awg/awg0.conf"
 START_SH="/opt/amnezia/start.sh"
@@ -782,6 +782,14 @@ def device_kb(ip):
     return kb
 
 
+def way_kb(ip):
+    kb = KB(row_width=1)
+    kb.add(Btn("🔑 Ключ — скопировать и вставить", callback_data=f"k|key|{ip}"))
+    kb.add(Btn("📷 QR-код — навести камеру", callback_data=f"k|qr|{ip}"))
+    kb.add(Btn("📄 Файл с настройками", callback_data=f"k|file|{ip}"))
+    return kb
+
+
 def send_conf(chat_id, path, caption="", ip=""):
     if not ip:
         m = re.search(r"_(\d+)\.conf$", path)
@@ -790,7 +798,17 @@ def send_conf(chat_id, path, caption="", ip=""):
     bot.send_message(chat_id, text, reply_markup=device_kb(ip))
 
 
+APP = ("Сначала установи приложение <b>AmneziaVPN</b>:\n"
+       "• Android — Google Play\n"
+       "• iPhone — App Store\n"
+       "• Компьютер — amnezia.org/downloads")
+
+
 def deliver(chat_id, ip, kind):
+    if kind == "dev":
+        return bot.send_message(chat_id, "📱💻 <b>Телефон или компьютер</b>\n\n" + APP +
+                                "\n\nКак удобнее добавить?", parse_mode="HTML", reply_markup=way_kb(ip))
+
     conf = api("conf", ip, with_err=False).strip()
     out = api("vpn", ip, with_err=False).strip().splitlines()
     vpn = out[-1] if out else ""
@@ -798,28 +816,37 @@ def deliver(chat_id, ip, kind):
         return bot.send_message(chat_id, "Не нашла конфиг этого клиента на сервере.", reply_markup=main_kb())
     key = open(vpn).read().strip()
 
-    if kind == "dev":
+    if kind == "key":
         bot.send_message(chat_id,
-            "📱💻 <b>Телефон или компьютер</b>\n\n"
-            "Сначала установи приложение <b>AmneziaVPN</b>:\n"
-            "• Android — Google Play\n"
-            "• iPhone — App Store\n"
-            "• Компьютер — amnezia.org/downloads\n\n"
-            "Дальше <b>любой из двух способов</b> 👇", parse_mode="HTML")
-        bot.send_message(chat_id,
-            "<b>Способ 1 — ключ</b>\n"
+            "🔑 <b>Ключ</b>\n"
             "1. Нажми на длинный текст ниже — он скопируется.\n"
             "2. В AmneziaVPN нажми <b>«Вставить»</b>, потом <b>«Продолжить»</b>.", parse_mode="HTML")
         bot.send_message(chat_id, "<code>" + html.escape(key) + "</code>", parse_mode="HTML")
+    elif kind == "qr":
+        bot.send_message(chat_id,
+            "📷 <b>QR-код</b>\n"
+            "Открой этот код на <b>другом</b> экране (комп, второй телефон).\n"
+            "В AmneziaVPN на телефоне: <b>«QR-код»</b> → наведи камеру.", parse_mode="HTML")
+        with tempfile.NamedTemporaryFile(suffix=".png") as png:
+            r = subprocess.run(["qrencode", "-s", "6", "-m", "2", "-o", png.name, key], capture_output=True)
+            if r.returncode == 0:
+                with open(png.name, "rb") as f:
+                    bot.send_photo(chat_id, f)
+            else:
+                logging.info("qrencode: %s", r.stderr)
+                bot.send_message(chat_id, "QR не получился — возьми ключ или файл.", reply_markup=way_kb(ip))
+                return
+    elif kind == "file":
         send_file(chat_id, vpn,
-            "Способ 2 — файл\n"
+            "📄 Файл с настройками\n"
             "1. Скачай этот файл.\n"
             "2. В AmneziaVPN выбери «Файл с настройками подключения» и укажи его.")
-        bot.send_message(chat_id, "✅ После этого нажми в приложении большую кнопку подключения.")
-    if kind == "router":
+    elif kind == "router":
         send_file(chat_id, conf,
             "📡 Для роутера Keenetic\n"
             "Интернет → Другие подключения → WireGuard → «Загрузить из файла» → выбери этот файл.")
+    if kind in ("key", "qr", "file"):
+        bot.send_message(chat_id, "✅ После этого нажми в приложении большую кнопку подключения.")
     bot.send_message(chat_id, "Если что-то не получается — напиши тому, кто выдал доступ 🙂")
     send_menu(chat_id)
 
